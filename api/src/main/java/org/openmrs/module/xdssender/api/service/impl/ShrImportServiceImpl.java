@@ -42,16 +42,28 @@ public class ShrImportServiceImpl implements XdsImportService {
 	@Override
 	public Ccd retrieveCCD(Patient patient) {
 		Ccd ccd = null;
-		Bundle result;
+		Bundle result = null;
 		try {
 			shrRetriever.setFhirContext(this.getFhirContext());
-			result = shrRetriever.sendRetrieveCCD(patient);
+			// Prefer the consolidated IPS (server-side aggregation via the SHR IPS mediator) when an
+			// IPS endpoint is configured; otherwise, or if it yields nothing, fall back to the legacy
+			// client-side CCD aggregation so existing deployments keep working unchanged.
+			String ipsEndpoint = config.getIpsEndpoint();
+			if (ipsEndpoint != null && !ipsEndpoint.isEmpty()) {
+				result = shrRetriever.fetchIps(patient);
+			}
+			if (result == null || !result.hasEntry() || result.getEntry().isEmpty()) {
+				result = shrRetriever.sendRetrieveCCD(patient);
+			}
 		} catch (Exception e) {
-			LOGGER.error("Unable to load CCD content", e);
+			LOGGER.error("Unable to load CCD/IPS content", e);
 			return null;
 		}
 
-		if(result != null && result.hasTotal() && result.getTotal() > 0) {
+		// Legacy CCD search bundles carry a total; IPS document bundles do not, so accept either.
+		boolean hasData = result != null && ((result.hasTotal() && result.getTotal() > 0)
+				|| (result.hasEntry() && !result.getEntry().isEmpty()));
+		if (hasData) {
 			ccd = new Ccd();
 			ccd.setPatient(patient);
 			ccd.setDocument(fhirContext.newJsonParser().encodeResourceToString(result));
